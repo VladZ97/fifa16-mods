@@ -494,6 +494,7 @@ def build(reg):
 
     n_sb = build_scoreboards(reg, new)
 
+    stage_root_ini(reg, win, new)
     old = STORE / "merged.old"
     safe_rmtree(old)
     if MERGED.exists():
@@ -501,7 +502,6 @@ def build(reg):
     new.rename(MERGED)
     safe_rmtree(old)
     link_download(reg)
-    stage_root_ini(reg, win)
     print(f"built {MERGED}: base + {len(layers)} mod(s) [{', '.join(layers) or '-'}], "
           f"{len(win)} mod files, {n_dirlinks} dir links, {n_filelinks} file links"
           + (f", scoreboards for {n_sb} competition(s)" if n_sb else ""))
@@ -586,11 +586,17 @@ def link_download(reg):
         os.symlink(MERGED, link)
 
 
-def stage_root_ini(reg, win):
-    """Root *.ini files are read from /app0, i.e. <game>-mods/. Base ini + mod overrides."""
+def stage_root_ini(reg, win, new=None):
+    """Root *.ini files are read from /app0: staged into <game>-mods/ (sibling discovery) and,
+    for the self-contained FIFA 16.app, into merged/app0/ (served as the /app0 overlay when the
+    merged tree is chosen as the mods folder)."""
     game = Path(reg["game"])
-    mods_dir = game.parent / f"{reg['title']}-mods"
-    mods_dir.mkdir(exist_ok=True)
+    for mods_dir in [game.parent / f"{reg['title']}-mods"] + ([new / "app0"] if new else []):
+        mods_dir.mkdir(exist_ok=True)
+        _stage_ini_into(reg, win, mods_dir)
+
+
+def _stage_ini_into(reg, win, mods_dir):
     base = Path(reg["base"])
     srcs = {p.name: p for p in base.glob("*.ini")}
     for rl, cands in win.items():
