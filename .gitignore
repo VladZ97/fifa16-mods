@@ -1,0 +1,11 @@
+merged/
+merged.new/
+merged.old/
+.tmp/
+__pycache__/
+*.pyc
+.DS_Store
+# extracted stock game assets: copyrighted, never published
+stock/data/sceneassets/
+stock/.big_index.json
+*.dylib

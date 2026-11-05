@@ -1,0 +1,12 @@
+EAHelveticaNeueConBol-Mod.ttf
+EAHeavy.ttf
+EAHelveticaNeueMed-Mod.ttf
+DFP-HeiSeiGothic-W5-mod.ttf
+DFP-HeiSeiGothic-W9-mod.ttf
+KlavikaBasic-Bold.ttf
+KlavikaBasic-Medium.ttf
+HelveticaNeueLTStd-Roman.ttf
+HelveticaNeueLTStd-Bd.ttf
+PremierLeague1.ttf
+ApexDFLBoldTabular.ttf
+ApexDFLBookTabular.ttf
