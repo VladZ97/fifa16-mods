@@ -113,3 +113,19 @@ The FIP base patch has the low-poly stand-in ball meshes (UV layout mismatch -> 
 tiny splashes). The mod "FIP balls (PS4 fixed meshes+textures)" carries the 59 fixed meshes the
 old Metal overlay linked (stripified / original high-poly from fip/_overwritten_by_mac_apply).
 High-poly originals are fine on the Metal build; the Vulkan build needs strips <= ~9k indices.
+
+## Legal
+
+- Unofficial, non-commercial community tool. Not affiliated with, endorsed or sponsored by Electronic
+  Arts Inc., FIFA, Sony Interactive Entertainment Inc., Konami or the authors of any patch or mod.
+- No game files, patch or mod content are included. Mod folders you install stay the property of
+  their authors; obtain patches from their authors. The PS4 fixes rewrite your local copy only: do
+  not redistribute fixed or converted files (hair meshes, crests, balls, stadiums), share this tool.
+- `tools/pes2fifa` reads Konami (or stadium mod authors') assets; converted stadiums contain their
+  artwork and are for your own use only. Share the tool, not its output.
+- FIFA is a registered trademark of the Fédération Internationale de Football Association; FIFA 16
+  and EA SPORTS are trademarks or product names of Electronic Arts Inc.; PlayStation and PS4 of Sony
+  Interactive Entertainment Inc.; PES and eFootball of Konami. Used only to say what this tool works with.
+- No warranty: provided "as is" (GPL sections 11 and 12). The tool deletes a mod's folder when you
+  remove it and rebuilds the merged tree on every change; keep backups of your patch archives.
+- Licence: GNU General Public License version 2 or (at your option) any later version (LICENSE).

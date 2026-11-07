@@ -79,3 +79,7 @@ missing textures show up here in a few seconds.
 - Lighting is ambient only (no baked sun direction); night uses the same bake with the
   stock night levels.
 - PES banners, flags, corner flags and sideline staff are not converted.
+
+## Legal
+
+Converted stadiums contain Konami's (or the stadium mod authors') artwork and are for your own use only; share this tool, not its output. Unofficial; not affiliated with Konami or Electronic Arts. PES, eFootball and FIFA are their owners' trademarks, used only to say what the tool reads and writes. Licence: GPL-2.0-or-later (LICENSE).

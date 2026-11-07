@@ -1,4 +1,5 @@
 #!/usr/bin/env -S python3 -I
+# SPDX-License-Identifier: GPL-2.0-or-later
 """fifamod - mod manager for FIFA 16 (PS4, CUSA02138) running in shadPS4 on macOS.
 
 Every mod lives in its own folder under <store>/mods/<slug>/files, normalised to the

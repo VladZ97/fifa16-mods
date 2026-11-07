@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
 """Fox Engine FTEX texture reader (PES 2018-2021 single-file textures) and RGBA decoding."""
 import io
 import struct

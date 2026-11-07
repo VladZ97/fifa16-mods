@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-2.0-or-later
 """pes2fifa - convert a PES 2021 / Football Life stadium folder into a FIFA 16 stadium mod.
 
   pes2fifa.py convert <PES stadium folder> --id <FIFA stadium id> --out <folder>

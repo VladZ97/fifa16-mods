@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
 """Floodlight glare files (data/sceneassets/fx/glares_<id>_<tod>_<n>.lnx).
 
 They are XML particle systems whose emitters sit at the stock stadium's floodlights. In a

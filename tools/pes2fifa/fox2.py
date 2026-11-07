@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
 """Fox Engine binary .fox2 scene reader (PES): just enough to get model placements.
 
 Entities carry a class name and typed properties; strings are stored as 64-bit hashes that

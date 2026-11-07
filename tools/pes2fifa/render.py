@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
 """Offline preview renderer for FIFA 16 stadium RX3 files (model + texture file).
 
 Draws what the converter wrote, not what it meant to write: positions, t0/t1 UVs, material

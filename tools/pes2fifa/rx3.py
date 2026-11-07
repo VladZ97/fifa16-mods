@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
 """FIFA 16 RX3 stadium model + texture container reader/writer (PS4/PC layout, little endian).
 
 `Stadium.parse(bytes)` / `Stadium.build()` round-trip a stock `stadium_<id>.rx3` byte for

@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-2.0-or-later
 """Minimal reader for FIFA 16 t3db databases (fifa_ng_db.db + -meta.xml).
 
   fifadb.py <db> <table> [field,field,...]      dump rows as TSV

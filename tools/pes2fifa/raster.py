@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
 """ctypes wrapper for raster.c; compiles it on first use (needs the system C compiler)."""
 import ctypes
 import os

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
 """Stock FIFA 16 asset access: pulls entries out of the game's BIG archives (update overlay
 first) and caches them decoded under ~/FIFA16Mods/stock/<entry path>."""
 import glob

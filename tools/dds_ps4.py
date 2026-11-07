@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-2.0-or-later
 """Convert compressed DDS UI images (DXT1/DXT5) to the uncompressed 32-bit BGRA layout the
 PS4 build of FIFA 16 loads for data/ui/imgAssets (every crest the game and the FIP patch
 ship is uncompressed; DXT5 crests from PC scoreboard mods render blank).

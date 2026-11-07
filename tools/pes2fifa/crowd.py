@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
 """PES audience areas (audiarea.bin) -> FIFA 16 crowd placement (crowd_<id>_<tod>.dat).
 
 PES describes the stands as quads with a seat-colour map; FIFA wants one 32-byte record per

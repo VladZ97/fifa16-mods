@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-2.0-or-later
 """Convert FIFA 16 PC hair / hairlod RX3 meshes to the PS4 vertex layout.
 
 PC files store positions as 3 x float32 (stride 40); every stock PS4 hair stores 4 x

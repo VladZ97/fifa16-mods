@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
 """Fox Engine FPK / FPKD archive reader (PES 2015-2021, Windows packages)."""
 import struct
 

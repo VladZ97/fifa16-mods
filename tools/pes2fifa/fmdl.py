@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
 """Fox Engine FMDL reader (PES 2016-2021 static models), numpy based.
 
 Only what a stadium conversion needs: LOD 0 geometry (positions, normals, colours, UV sets,

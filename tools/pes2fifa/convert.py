@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
 """PES 2021 (Fox Engine) stadium -> FIFA 16 stadium RX3 conversion.
 
 The stock FIFA stadium being replaced is the template: its pitch, ad boards, sky, props and

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
 """Per-vertex sky lighting bake for converted stadiums.
 
 PES models carry no lightmaps; FIFA's stadium shaders multiply the diffuse texture by an

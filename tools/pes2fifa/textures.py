@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
 """Texture conversion: PES FTEX (DXT1/DXT5 pass-through, anything else re-encoded) -> RX3 textures."""
 import io
 
