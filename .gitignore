@@ -9,3 +9,6 @@ __pycache__/
 stock/data/sceneassets/
 stock/.big_index.json
 *.dylib
+
+# the user's own registry (personal paths)
+mods.json
