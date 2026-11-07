@@ -24,13 +24,20 @@ usage:
   fifamod status                   where /download0 points, what is enabled
   fifamod link <download/TITLE path> [--remove]   manage extra emulator builds' overlay links
   fifamod init --base DIR --game DIR [--title CUSA02138] [--mods-dir DIR]
+
+For the FIFA 16 app (compiled into its bundle, FIFAMOD_APP=1 and FIFAMOD_STORE set):
+  fifamod configure [--base DIR] [--game DIR] [--mods-dir DIR]   create or update the registry
+  fifamod state                    the whole library as JSON
+  fifamod details <mod>            one mod's parts, variants and conflicts as JSON
 """
 import argparse
 import datetime as _dt
+import importlib
 import json
 import os
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -39,6 +46,9 @@ from pathlib import Path
 
 # The store (registry + merged symlink tree) must live on APFS: exFAT fakes symlinks badly.
 STORE = Path(os.environ.get("FIFAMOD_STORE", Path(__file__).resolve().parent))
+# Inside the FIFA 16 app: nothing is written outside the store and the mods folder (no shadPS4
+# download links, no folder next to the game unless one is already there).
+APP_MODE = os.environ.get("FIFAMOD_APP") == "1"
 MODS_DIR = STORE / "mods"  # overridden by "mods_dir" in mods.json (may be on the SSD)
 MERGED = STORE / "merged"
 REGISTRY = STORE / "mods.json"
@@ -67,8 +77,17 @@ JUNK = {".DS_Store", "Thumbs.db", "desktop.ini", "__MACOSX"}
 MERGE_LINES = {"data/ui/fonts/fonts.txt"}  # union of lines across layers
 # A loose fonts.txt REPLACES the packed one (an empty loose file falls back to it), so the
 # merged list must start from the stock entries kept under <store>/stock/.
-STOCK = STORE / "stock"
-TOOLS = STORE / "tools"
+# FIFAMOD_RESOURCES: read-only files of the app bundle (the store holds user data only there).
+RESOURCES = Path(os.environ.get("FIFAMOD_RESOURCES", STORE))
+STOCK = RESOURCES / "stock"
+TOOLS = RESOURCES / "tools"
+
+
+def tool(name):
+    """A module of tools/ (compiled into the binary in the app; imported from TOOLS otherwise)."""
+    if str(TOOLS) not in sys.path:
+        sys.path.insert(0, str(TOOLS))
+    return importlib.import_module(name)
 
 
 # ------------------------------------------------------------------ fixers
@@ -79,9 +98,7 @@ def fix_hair_layout(path: Path):
         return None
     if not (path.name.startswith("hair_") or path.name.startswith("hairlod_")):
         return None
-    import importlib.util
-    spec = importlib.util.spec_from_file_location("hair_ps4", TOOLS / "hair_ps4.py")
-    mod = importlib.util.module_from_spec(spec); spec.loader.exec_module(mod)
+    mod = tool("hair_ps4")
     try:
         new, note = mod.convert_bytes(path.read_bytes())
     except ValueError:
@@ -94,9 +111,7 @@ def fix_dds_uncompressed(path: Path):
     """Compressed (DXT) DDS under data/ui/imgAssets -> uncompressed 32-bit, as the PS4 build needs."""
     if path.suffix.lower() != ".dds" or "/data/ui/imgassets/" not in path.as_posix().lower():
         return None
-    import importlib.util
-    spec = importlib.util.spec_from_file_location("dds_ps4", TOOLS / "dds_ps4.py")
-    mod = importlib.util.module_from_spec(spec); spec.loader.exec_module(mod)
+    mod = tool("dds_ps4")
     try:
         new = mod.convert_bytes(path.read_bytes())
     except (ValueError, AssertionError, IndexError):
@@ -194,25 +209,115 @@ def mod_files(slug, honour_excludes=True):
 
 
 # ------------------------------------------------------------------ install
+def check_source(src: Path):
+    """Refuse what cannot be a mod before anything is copied: a stray folder choice must not
+    fill the disk. An archive or a folder of game files only, with room for it in the store."""
+    if src.suffix.lower() == ".app" or any(p.suffix.lower() == ".app" for p in src.parents):
+        sys.exit(f"{src.name} is an application, not a mod")
+    if src.is_dir():
+        home = Path.home().resolve()
+        system = [Path(p) for p in ("/", "/Applications", "/Library", "/System", "/Users", "/Volumes", "/private", "/usr",
+                                    "/opt", "/bin", "/sbin", "/etc", "/var")]
+        if (src in system or src == home or src.parent == Path("/Volumes") or src in
+                [home / d for d in ("Desktop", "Documents", "Downloads", "Library", "Applications", "Movies", "Music", "Pictures")]
+                or any(src.is_relative_to(p) for p in (Path("/System"), Path("/Library"), Path("/Applications"), Path("/usr")))):
+            sys.exit(f"{src} is not a mod folder: choose the mod's own folder or archive")
+    need = 0
+    if src.is_file():
+        need = archive_unpacked_size(src) or src.stat().st_size * 3
+    else:
+        for d, _, files in os.walk(src):
+            for f in files:
+                try:
+                    need += os.lstat(os.path.join(d, f)).st_size
+                except OSError:
+                    pass
+    return pick_tmp_base(need, src.name)
+
+
+def archive_unpacked_size(src: Path):
+    """The unpacked size from the archive's own listing (7zz l summary line), None if unknown."""
+    seven = os.environ.get("FIFAMOD_7ZZ") or shutil.which("7zz") or shutil.which("7z")
+    if not seven or not os.access(seven, os.X_OK):
+        return None
+    try:
+        r = subprocess.run([seven, "l", "-p-", str(src)], capture_output=True, text=True, timeout=300)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    for line in reversed(r.stdout.splitlines()):
+        m = re.match(r"^\S+ \S+\s+(\d+)\s+(?:\d+\s+)?\d+ files", line)
+        if m:
+            return int(m.group(1))
+    return None
+
+
+def pick_tmp_base(need: int, what: str):
+    """Where to unpack: the library's own volume (APFS) when it has room, else the mods folder's
+    volume (a 44 GiB patch does not fit on a small internal disk; the SSD holds the mods anyway,
+    and unpacking there makes the final move a rename). Refuses, with both numbers, otherwise."""
+    margin = need + need // 10 + (1 << 30)
+    bases = [STORE]
+    try:
+        if MODS_DIR.is_dir() and os.stat(MODS_DIR).st_dev != os.stat(STORE).st_dev:
+            bases.append(MODS_DIR)
+    except OSError:
+        pass
+    frees = []
+    for base in bases:
+        free = shutil.disk_usage(base).free
+        frees.append((base, free))
+        if free >= margin:
+            if base is not STORE:
+                print(f"unpacking in the mods folder's volume ({free >> 30} GiB free there; "
+                      f"{frees[0][1] >> 30} GiB on the library's)")
+            return base
+    sys.exit(f"not enough free disk space for {what}: about {need >> 20} MiB unpacked, free: " +
+             ", ".join(f"{f >> 20} MiB on {b}" for b, f in frees))
+
+
+def clear_tmp():
+    """Leftovers of an install that was killed (only one install runs at a time)."""
+    for base in {STORE, MODS_DIR}:
+        tmp = base / ".tmp"
+        if tmp.is_dir():
+            for p in tmp.iterdir():
+                if p.name.startswith("fifamod-"):
+                    shutil.rmtree(p, ignore_errors=True)
+
+
 def extract(src: Path, dest: Path):
     if src.is_dir():
         shutil.copytree(src, dest / src.name, symlinks=False)
         return
-    seven = shutil.which("7zz") or shutil.which("7z")
-    unrar = shutil.which("unrar")
+    bundled = os.environ.get("FIFAMOD_7ZZ")
+    seven = bundled if bundled and os.access(bundled, os.X_OK) else shutil.which("7zz") or shutil.which("7z")
+    # RAR: the bundled unrar first (RARLAB's own decoder; 7-Zip 23 cannot read every RAR5
+    # archive, e.g. FIFA Infinity Patch 9.0: "Unsupported Method"), then 7zz, then bsdtar.
+    unrar = os.environ.get("FIFAMOD_UNRAR") or (None if bundled else shutil.which("unrar"))
+    if unrar and not os.access(unrar, os.X_OK):
+        unrar = None
     cmds = []
     if seven:
-        cmds.append([seven, "x", "-y", "-bso0", "-bsp0", f"-o{dest}", str(src)])
+        cmds.append([seven, "x", "-y", "-bso0", "-bsp0", "-p-", f"-o{dest}", str(src)])
     if unrar and src.suffix.lower() == ".rar":
         cmds.insert(0, [unrar, "x", "-o+", "-inul", str(src), str(dest) + "/"])
+    if os.access("/usr/bin/bsdtar", os.X_OK):  # every Mac has it: zip, 7z, rar
+        cmds.append(["/usr/bin/bsdtar", "-xf", str(src), "-C", str(dest)])
     if not cmds:
         sys.exit("need 7zz (brew install sevenzip) or unrar to extract archives")
+    # bsdtar cannot follow the volumes of a multi-part archive: its error would only hide 7zz's.
+    if any(pattern.match(src.name) for pattern, _ in VOLUME_PATTERNS):
+        cmds = [c for c in cmds if c[0] != "/usr/bin/bsdtar"] or cmds
+    errors = []
     for c in cmds:
-        r = subprocess.run(c, capture_output=True, text=True)
+        r = subprocess.run(c, capture_output=True, text=True)  # a SIGTERM here ends it too (see main)
         if r.returncode == 0:
             return
-        last = r.stderr.strip() or r.stdout.strip()
-    sys.exit(f"extraction failed: {last}")
+        text = (r.stderr.strip() or r.stdout.strip()).splitlines()
+        errors.append(f"{Path(c[0]).name}: " + " | ".join(text[-3:]) if text else f"{Path(c[0]).name}: status {r.returncode}")
+        for leftover in dest.iterdir():
+            shutil.rmtree(leftover, ignore_errors=True) if leftover.is_dir() else leftover.unlink(missing_ok=True)
+    sys.exit("extraction failed: " + "; ".join(errors))
 
 
 def classify(rel_parts):
@@ -274,15 +379,47 @@ def plan_install(extracted: Path, args_skip_optional=False):
     return mapping, extras, notes
 
 
+VOLUME_PATTERNS = (  # multi-part archives: (regex on the file name, how to name the first part)
+    (re.compile(r"^(?P<base>.+)\.part(?P<n>\d+)\.rar$", re.I), lambda m: f"{m['base']}.part{'1'.zfill(len(m['n']))}.rar"),
+    (re.compile(r"^(?P<base>.+)\.r(?P<n>\d\d)$", re.I), lambda m: f"{m['base']}.rar"),
+    (re.compile(r"^(?P<base>.+\.(?:7z|zip|rar))\.(?P<n>\d{3})$", re.I), lambda m: f"{m['base']}.001"),
+)
+
+
+def first_volume(src: Path):
+    """A multi-part archive is extracted from its first part (7zz follows the others, which must
+    sit beside it). Returns (file to extract, mod name without the part suffix); any other file
+    comes back unchanged. Picking a later part is redirected, not refused."""
+    for pattern, first in VOLUME_PATTERNS:
+        m = pattern.match(src.name)
+        if not m:
+            continue
+        base = Path(m["base"]).stem if m["base"].lower().endswith((".7z", ".zip", ".rar")) else m["base"]
+        candidate = src.with_name(first(m))
+        if candidate.is_file():
+            if candidate != src:
+                print(f"multi-part archive: extracting from {candidate.name}")
+            return candidate, base
+        sys.exit(f"{src.name} is part of a multi-part archive, but its first part ({candidate.name}) is not beside it")
+    return src, src.stem
+
+
 def cmd_install(args):
     reg = load_reg()
     src = Path(args.source).expanduser().resolve()
     if not src.exists():
         sys.exit(f"not found: {src}")
-    name = args.name or src.stem if src.is_file() else (args.name or src.name)
-    # Extract on APFS (the store), not on the exFAT SSD: its driver mangles non-ASCII names.
-    (STORE / ".tmp").mkdir(exist_ok=True)
-    tmp = Path(tempfile.mkdtemp(prefix="fifamod-", dir=STORE / ".tmp"))
+    if src.is_file():
+        src, stem = first_volume(src)
+        name = args.name or stem
+    else:
+        name = args.name or src.name
+    tmp_base = check_source(src)
+    clear_tmp()
+    # Unpack on the library's volume (APFS) when it has room: the exFAT driver mangles
+    # non-ASCII names. A big patch unpacks on the mods folder's volume instead (pick_tmp_base).
+    (tmp_base / ".tmp").mkdir(exist_ok=True)
+    tmp = Path(tempfile.mkdtemp(prefix="fifamod-", dir=tmp_base / ".tmp"))
     try:
         print(f"extracting {src.name} ...")
         extract(src, tmp)
@@ -297,7 +434,7 @@ def cmd_install(args):
         if slug in reg["mods"]:
             if not args.replace:
                 sys.exit(f"mod '{slug}' already installed; use --replace to overwrite it, or --name")
-        base_files = mod_files_from_dir(Path(reg["base"]), mapping.keys())
+        base_files = mod_files_from_dir(Path(reg["base"]), mapping.keys()) if reg.get("base") else set()
         overrides = sorted(r for r in mapping if r in base_files)
         conflicts = {}
         for other in reg["mods"]:
@@ -317,7 +454,7 @@ def cmd_install(args):
         for c, hit in conflicts.items():
             print(f"  conflicts with '{c}': {len(hit)} files (this mod will win if it is later in the order)")
         for n in notes:
-            print(f"  note: {n}")
+            print(f"  note: {app_note(n) if APP_MODE else n}")
         ex_by_dir = {}
         for e in extras:
             d = str(e.relative_to(tmp).parent)
@@ -350,6 +487,7 @@ def cmd_install(args):
         }
         for junk in list(dest.rglob("._*")):  # AppleDouble files macOS leaves on exFAT
             _unlink_any(str(junk))
+        print("applying PS4 fixes ...")
         fixes = run_fixers(files_root)
         if fixes:
             meta["fixes"] = fixes
@@ -434,9 +572,11 @@ def winners(reg):
 
 
 def build(reg):
-    base = Path(reg["base"])
-    if not base.is_dir():
+    base = Path(reg["base"]) if reg.get("base") else None  # the app runs without a base patch
+    if base and not base.is_dir():
         sys.exit(f"base patch folder missing: {base}")
+    if reg["mods"] and not MODS_DIR.is_dir():
+        sys.exit(f"mods folder missing: {MODS_DIR}")
     win, layers = winners(reg)
     touched_dirs = set()
     for rel in win:  # already lowercase
@@ -448,6 +588,7 @@ def build(reg):
             d = os.path.dirname(d)
     new = STORE / "merged.new"
     safe_rmtree(new)
+    STORE.mkdir(parents=True, exist_ok=True)
     new.mkdir()
     (new / MARKER).write_text(_dt.datetime.now().isoformat() + "\n")
     placed = set()
@@ -479,7 +620,8 @@ def build(reg):
                     n_filelinks += 1
                 placed.add(rl)
 
-    walk("")
+    if base:
+        walk("")
     for rl, cands in win.items():
         if rl in placed:
             continue
@@ -541,10 +683,12 @@ def build_scoreboards(reg, new: Path):
 
 
 def team_leagues(reg):
-    import importlib.util
-    spec = importlib.util.spec_from_file_location("fifadb", TOOLS / "fifadb.py")
-    fdb = importlib.util.module_from_spec(spec); spec.loader.exec_module(fdb)
+    fdb = tool("fifadb")
+    if not reg.get("base"):
+        return []
     db = Path(reg["base"]) / "data/db/fifa_ng_db.db"
+    if not db.is_file():
+        return []
     return [(r["teamid"], r["leagueid"]) for r in fdb.read_table(str(db), "leagueteamlinks")]
 
 
@@ -571,6 +715,8 @@ def download_links(reg):
 
 
 def link_download(reg):
+    if APP_MODE:
+        return  # the app hands the merged tree to the emulator itself
     for link in download_links(reg):
         link.parent.mkdir(parents=True, exist_ok=True)
         if link.is_symlink():
@@ -590,15 +736,17 @@ def stage_root_ini(reg, win, new=None):
     """Root *.ini files are read from /app0: staged into <game>-mods/ (sibling discovery) and,
     for the self-contained FIFA 16.app, into merged/app0/ (served as the /app0 overlay when the
     merged tree is chosen as the mods folder)."""
-    game = Path(reg["game"])
-    for mods_dir in [game.parent / f"{reg['title']}-mods"] + ([new / "app0"] if new else []):
+    sibling = Path(reg["game"]).parent / f"{reg['title']}-mods" if reg.get("game") else None
+    targets = [new / "app0"] if new else []
+    if sibling and (not APP_MODE or sibling.is_dir()):  # the app never creates it
+        targets.insert(0, sibling)
+    for mods_dir in targets:
         mods_dir.mkdir(exist_ok=True)
         _stage_ini_into(reg, win, mods_dir)
 
 
 def _stage_ini_into(reg, win, mods_dir):
-    base = Path(reg["base"])
-    srcs = {p.name: p for p in base.glob("*.ini")}
+    srcs = {p.name: p for p in Path(reg["base"]).glob("*.ini")} if reg.get("base") else {}
     for rl, cands in win.items():
         if "/" not in rl and rl.endswith(".ini"):
             srcs[cands[-1][2]] = cands[-1][1]
@@ -865,6 +1013,119 @@ def cmd_init(args):
     build(reg)
 
 
+def cmd_configure(args):
+    """Create or update the registry (the app calls this; unlike init it keeps everything else)."""
+    STORE.mkdir(parents=True, exist_ok=True)
+    reg = json.loads(REGISTRY.read_text()) if REGISTRY.exists() else {
+        "title": "CUSA02138", "base": "", "game": "", "mods_dir": str(STORE / "mods"), "mods": []}
+    if args.base is not None:
+        base = str(Path(args.base).expanduser()) if args.base else ""
+        if base and not (Path(base) / "data").is_dir():
+            sys.exit(f"{base} has no data/ folder: it is not a patch's Manual Install folder")
+        reg["base"] = base
+    if args.game is not None:
+        reg["game"] = str(Path(args.game).expanduser()) if args.game else ""
+    if args.mods_dir:
+        new = Path(args.mods_dir).expanduser()
+        lost = [s for s in reg["mods"] if not (new / s / "mod.json").exists()]
+        if lost and str(new) != reg.get("mods_dir"):
+            sys.exit(f"{len(lost)} installed mod(s) are not in {new}: move them there first, or remove them")
+        reg["mods_dir"] = str(new)
+    global MODS_DIR
+    MODS_DIR = Path(reg["mods_dir"])
+    MODS_DIR.mkdir(parents=True, exist_ok=True)
+    for d in sorted(MODS_DIR.iterdir()):  # mod folders already there
+        if (d / "mod.json").exists() and d.name not in reg["mods"]:
+            reg["mods"].append(d.name)
+    save_reg(reg)
+    if args.build:
+        build(reg)
+
+
+def cmd_state(args):
+    """The library as JSON, for the app. Works with the mods drive disconnected."""
+    out = {"store": str(STORE), "merged": str(MERGED), "initialised": REGISTRY.exists(), "mods": [], "scoreboards": []}
+    if REGISTRY.exists():
+        reg = load_reg()
+        base = reg.get("base", "")
+        out.update(base=base, base_ok=bool(base) and Path(base).is_dir(), game=reg.get("game", ""),
+                   mods_dir=str(MODS_DIR), mods_dir_ok=MODS_DIR.is_dir())
+        present = [s for s in reg["mods"] if mod_meta_path(s).exists()]
+        clone = dict(reg, mods=present)
+        win, layers = winners(clone)
+        out["layers"] = layers
+        out["conflicts"] = sum(1 for rl, c in win.items() if len(c) > 1 and rl not in MERGE_LINES)
+        for slug in reg["mods"]:
+            if slug not in present:
+                out["mods"].append({"slug": slug, "name": slug.replace("_", " "), "enabled": False, "missing": True})
+                continue
+            m = load_mod(slug)
+            files = mod_files(slug)
+            extras = MODS_DIR / slug / "extras"
+            out["mods"].append({
+                "slug": slug, "name": m["name"], "enabled": m.get("enabled", True), "missing": False,
+                "files": len(files), "overrides_base": m.get("overrides_base", 0),
+                "clash": sum(1 for r in files if len(win.get(r.lower(), [])) > 1 and r.lower() not in MERGE_LINES),
+                "installed": m.get("installed", "")[:10], "excluded": m.get("exclude", []),
+                "has_extras": extras.is_dir() and any(extras.iterdir()), "notes": m.get("notes", []),
+                "fixes": m.get("fixes", {}), "folder": str(MODS_DIR / slug)})
+        leagues = {l for _, l in team_leagues(reg)} if reg.get("scoreboards") else set()
+        for comp, slug in sorted(reg.get("scoreboards", {}).items(), key=lambda kv: int(kv[0])):
+            out["scoreboards"].append({"comp": int(comp), "slug": slug, "league": int(comp) in leagues})
+    if (MERGED / MARKER).exists():
+        out["merged_at"] = (MERGED / MARKER).read_text().strip()
+    print(json.dumps(out, ensure_ascii=False))
+
+
+def app_note(note):
+    """Install notes speak to the command line; the app has a switch for this one."""
+    return note.replace(" (use --skip-optional to leave it out)", "")
+
+
+def cmd_details(args):
+    """One mod as JSON, for the app: its parts (for exclude), variants (for pick) and conflicts."""
+    reg = load_reg()
+    slug = find_mod(reg, args.mod)
+    m = load_mod(slug)
+    win, _ = winners(reg)
+    every = mod_files(slug, honour_excludes=False)
+    excluded = [e.strip("/") for e in m.get("exclude", [])]
+    parts = {}
+    for rel in every:
+        bits = rel.split("/")
+        for depth in range(1, min(len(bits), 5)):
+            key = "/".join(bits[:depth])
+            parts[key] = parts.get(key, 0) + 1
+    # A part worth listing: the folder where the tree first branches, and everything below it.
+    shown = sorted(k for k in parts if parts[k] < len(every) and not any(
+        o.startswith(k + "/") and parts[o] == parts[k] for o in parts))
+    conflicts = {}
+    for rel in mod_files(slug):
+        for c in win.get(rel.lower(), []):
+            if c[0] != slug and rel.lower() not in MERGE_LINES:
+                entry = conflicts.setdefault(c[0], {"slug": c[0], "files": 0, "wins": 0})
+                entry["files"] += 1
+                entry["wins"] += win[rel.lower()][-1][0] == slug
+    ex_root = MODS_DIR / slug / "extras"
+    extras = sorted(p.relative_to(ex_root).as_posix() for p in ex_root.rglob("*")
+                    if p.is_file() and not p.name.startswith("._")) if ex_root.is_dir() else []
+    variants = []
+    for e in extras:
+        stem, suffix = Path(e).stem.lower(), Path(e).suffix.lower()
+        if not suffix or suffix in (".txt", ".pdf", ".png", ".jpg", ".jpeg", ".url", ".html", ".docx"):
+            continue
+        targets = sorted(r for r in every if Path(r).suffix.lower() == suffix
+                         and (stem.startswith(Path(r).stem.lower()) or Path(r).stem.lower().startswith(stem)))
+        variants.append({"file": e, "targets": targets[:20], "in_use": e in m.get("picks", {}).values()})
+    print(json.dumps({
+        "slug": slug, "name": m["name"], "source": m.get("source", ""), "installed": m.get("installed", ""),
+        "folder": str(MODS_DIR / slug), "notes": [app_note(n) for n in m.get("notes", [])], "fixes": m.get("fixes", {}),
+        "parts": [{"path": k, "files": parts[k], "excluded": any(
+            k.lower() == e.lower() or k.lower().startswith(e.lower() + "/") for e in excluded)} for k in shown],
+        "extras": extras, "variants": variants, "picks": m.get("picks", {}),
+        "conflicts": sorted(conflicts.values(), key=lambda c: -c["files"])}, ensure_ascii=False))
+
+
 # --------------------------------------------------------------------- menu
 def menu():
     while True:
@@ -916,6 +1177,10 @@ def main(argv=None):
     p.add_argument("--replace", action="store_true"); p.add_argument("--skip-optional", action="store_true",
                    help="leave '_folder' optional parts (e.g. _imgAssets crests) in extras/")
     p.set_defaults(fn=cmd_install)
+    p = sub.add_parser("configure"); p.add_argument("--base"); p.add_argument("--game"); p.add_argument("--mods-dir")
+    p.add_argument("--build", action="store_true"); p.set_defaults(fn=cmd_configure)
+    sub.add_parser("state").set_defaults(fn=cmd_state)
+    p = sub.add_parser("details"); p.add_argument("mod"); p.set_defaults(fn=cmd_details)
     sub.add_parser("list").set_defaults(fn=cmd_list)
     p = sub.add_parser("info"); p.add_argument("mod"); p.set_defaults(fn=cmd_info)
     p = sub.add_parser("enable"); p.add_argument("mod"); p.set_defaults(fn=lambda a: set_enabled(a, True))
@@ -947,4 +1212,8 @@ def main(argv=None):
 
 
 if __name__ == "__main__":
+    # Cancel in the app sends SIGTERM: leave through the normal path so temporary files go.
+    signal.signal(signal.SIGTERM, lambda *_: sys.exit("cancelled"))
+    sys.stdout.reconfigure(line_buffering=True, encoding="utf-8")  # the app shows progress as it comes
+    sys.stderr.reconfigure(encoding="utf-8")
     main()

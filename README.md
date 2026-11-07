@@ -18,6 +18,15 @@ fifamod move <mod> top|bottom|up|down|<n>
 fifamod build                        rebuild after editing files by hand
 ```
 
+Archives: `.rar`, `.zip`, `.7z` and plain folders. Multi-part sets (`x.part01.rar`, `x.r00`,
+`x.7z.001`) can be given by any part: the set is installed once from its first volume and
+named without the part suffix; a lone part whose first volume is missing is refused. RAR is
+decoded by `unrar` when present (`FIFAMOD_UNRAR=<path>`, or `unrar` on PATH; the FIFA 16 app
+bundles it) because 7-Zip cannot read the RAR5 method the FIFA Infinity Patch 9.0 uses, else
+by `7zz`. Big archives are unpacked on the library's volume when it has room for the unpacked
+size, otherwise on the mods folder's volume (FIP 9.0 needs 44 GB); with room on neither the
+install stops before extracting and says how much is needed.
+
 Archives are mapped by folder name: `data/...` and `dlc/...` as-is; `game/`, `fonts/` ->
 `data/ui/`; `overlays/`, `globalcomponents/` -> `data/ui/game/`; `kit/`, `heads/`, `ball/`...
 -> `data/sceneassets/`; root `*.ini` -> `<game>-mods/` (served as /app0). `fonts.txt`
